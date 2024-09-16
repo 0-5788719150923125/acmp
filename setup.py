@@ -11,5 +11,9 @@ setup(
         "torchaudio",
         "transformers",
         "wave",
+        "datasets",
+        "soundfile",
+        "speechbrain",
+        "accelerate",
     ],
 )
