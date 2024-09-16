@@ -1,0 +1,9 @@
+*.egg*
+*logs
+*.mp3
+*.wav
+__pycache__
+build
+data
+venv
+tmp
