@@ -15,5 +15,6 @@ setup(
         "soundfile",
         "speechbrain",
         "accelerate",
+        "librosa",
     ],
 )

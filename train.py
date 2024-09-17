@@ -1,18 +1,33 @@
 # Copied from here: https://huggingface.co/docs/transformers/en/tasks/text-to-speech
+import os
+
+os.environ["HF_HOME"] = "data"
+
+device = "cuda:1"
+cache_dir = "data"
+
 from datasets import load_dataset, Audio
 
-dataset = load_dataset("facebook/voxpopuli", "nl", split="train")
+dataset = load_dataset(
+    "facebook/voxpopuli",
+    "nl",
+    split="train",
+    trust_remote_code=True,
+)
 len(dataset)
 
 dataset = dataset.cast_column("audio", Audio(sampling_rate=16000))
 
 from transformers import SpeechT5Processor
 
-device = "cuda:1"
 
 checkpoint = "microsoft/speecht5_tts"
 processor = SpeechT5Processor.from_pretrained(
-    checkpoint, cache_dir="data", trust_remote_code=True, device=device
+    checkpoint,
+    cache_dir=cache_dir,
+    trust_remote_code=True,
+    device=device,
+    device_map=device,
 )
 
 tokenizer = processor.tokenizer
@@ -86,10 +101,9 @@ from speechbrain.inference.classifiers import EncoderClassifier
 
 spk_model_name = "speechbrain/spkrec-xvect-voxceleb"
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
 speaker_model = EncoderClassifier.from_hparams(
     source=spk_model_name,
-    run_opts={"device": device},
+    run_opts={"device": device, "device_map": device},
     savedir=os.path.join("/tmp", spk_model_name),
 )
 
@@ -198,7 +212,7 @@ data_collator = TTSDataCollatorWithPadding(processor=processor)
 from transformers import SpeechT5ForTextToSpeech
 
 model = SpeechT5ForTextToSpeech.from_pretrained(
-    checkpoint, cache_dir="data", device=device, trust_remote_code=True
+    checkpoint, cache_dir=cache_dir, device_map=device
 )
 model.config.use_cache = False
 
@@ -206,8 +220,8 @@ from transformers import Seq2SeqTrainingArguments
 
 training_args = Seq2SeqTrainingArguments(
     output_dir="speecht5_finetuned_voxpopuli_nl",  # change to a repo name of your choice
-    per_device_train_batch_size=4,
-    gradient_accumulation_steps=8,
+    per_device_train_batch_size=1,
+    gradient_accumulation_steps=32,
     learning_rate=1e-5,
     warmup_steps=500,
     max_steps=4000,
@@ -218,11 +232,11 @@ training_args = Seq2SeqTrainingArguments(
     save_steps=1000,
     eval_steps=1000,
     logging_steps=25,
-    report_to=["tensorboard"],
+    # report_to=["tensorboard"],
     load_best_model_at_end=True,
     greater_is_better=False,
     label_names=["labels"],
-    push_to_hub=True,
+    push_to_hub=False,
 )
 
 from transformers import Seq2SeqTrainer
