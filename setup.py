@@ -4,6 +4,7 @@ setup(
     name="acmp",
     packages=find_packages(),
     install_requires=[
+        "deepspeed",
         "numpy",
         "pydub",
         "scipy",

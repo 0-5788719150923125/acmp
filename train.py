@@ -14,10 +14,11 @@ from transformers import (
     SpeechT5Processor,
 )
 
+os.environ["CUDA_VISIBLE_DEVICES"] = ""
 os.environ["HF_HOME"] = "data"
 
 
-device = "cuda:1"
+device = "cpu"
 cache_dir = "data"
 
 
@@ -44,7 +45,6 @@ if not resume:
         split="train",
         trust_remote_code=True,
     )
-    len(dataset)
 
     dataset = dataset.cast_column("audio", Audio(sampling_rate=16000))
 
@@ -87,21 +87,10 @@ if not resume:
     for speaker_id in dataset["speaker_id"]:
         speaker_counts[speaker_id] += 1
 
-    # import matplotlib.pyplot as plt
-
-    # plt.figure()
-    # plt.hist(speaker_counts.values(), bins=20)
-    # plt.ylabel("Speakers")
-    # plt.xlabel("Examples")
-    # plt.show()
-
     def select_speaker(speaker_id):
         return 100 <= speaker_counts[speaker_id] <= 400
 
     dataset = dataset.filter(select_speaker, input_columns=["speaker_id"])
-
-    len(set(dataset["speaker_id"]))
-    len(dataset)
 
     spk_model_name = "speechbrain/spkrec-xvect-voxceleb"
 
@@ -138,17 +127,6 @@ if not resume:
 
         return example
 
-    processed_example = prepare_dataset(dataset[0])
-    list(processed_example.keys())
-
-    processed_example["speaker_embeddings"].shape
-
-    # import matplotlib.pyplot as plt
-
-    # plt.figure()
-    # plt.imshow(processed_example["labels"].T)
-    # plt.show()
-
     dataset = dataset.map(prepare_dataset, remove_columns=dataset.column_names)
 
     def is_not_too_long(input_ids):
@@ -156,7 +134,6 @@ if not resume:
         return input_length < 200
 
     dataset = dataset.filter(is_not_too_long, input_columns=["input_ids"])
-    len(dataset)
 
     dataset = dataset.train_test_split(test_size=0.1)
     dataset.save_to_disk(f"{cache_dir}/processed_dataset")
@@ -236,6 +213,7 @@ training_args = Seq2SeqTrainingArguments(
     greater_is_better=False,
     label_names=["labels"],
     push_to_hub=False,
+    # deepspeed="deepspeed.json",
 )
 
 
