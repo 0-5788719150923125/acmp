@@ -1,24 +1,27 @@
 # Copied from here: https://huggingface.co/docs/transformers/en/tasks/text-to-speech
 import os
+from collections import defaultdict
+from dataclasses import dataclass
+from typing import Any, Dict, List, Union
+
+import torch
+from datasets import Audio, load_dataset, load_from_disk
+from speechbrain.inference.classifiers import EncoderClassifier
+from transformers import (
+    Seq2SeqTrainer,
+    Seq2SeqTrainingArguments,
+    SpeechT5ForTextToSpeech,
+    SpeechT5Processor,
+)
 
 os.environ["HF_HOME"] = "data"
+
 
 device = "cuda:1"
 cache_dir = "data"
 
-from datasets import load_dataset, Audio
 
-dataset = load_dataset(
-    "facebook/voxpopuli",
-    "nl",
-    split="train",
-    trust_remote_code=True,
-)
-len(dataset)
-
-dataset = dataset.cast_column("audio", Audio(sampling_rate=16000))
-
-from transformers import SpeechT5Processor
+resume = True
 
 
 checkpoint = "microsoft/speecht5_tts"
@@ -33,134 +36,132 @@ processor = SpeechT5Processor.from_pretrained(
 tokenizer = processor.tokenizer
 
 
-def extract_all_chars(batch):
-    all_text = " ".join(batch["normalized_text"])
-    vocab = list(set(all_text))
-    return {"vocab": [vocab], "all_text": [all_text]}
+if not resume:
 
+    dataset = load_dataset(
+        "facebook/voxpopuli",
+        "nl",
+        split="train",
+        trust_remote_code=True,
+    )
+    len(dataset)
 
-vocabs = dataset.map(
-    extract_all_chars,
-    batched=True,
-    batch_size=-1,
-    keep_in_memory=True,
-    remove_columns=dataset.column_names,
-)
+    dataset = dataset.cast_column("audio", Audio(sampling_rate=16000))
 
-dataset_vocab = set(vocabs["vocab"][0])
-tokenizer_vocab = {k for k, _ in tokenizer.get_vocab().items()}
+    def extract_all_chars(batch):
+        all_text = " ".join(batch["normalized_text"])
+        vocab = list(set(all_text))
+        return {"vocab": [vocab], "all_text": [all_text]}
 
-replacements = [
-    ("à", "a"),
-    ("ç", "c"),
-    ("è", "e"),
-    ("ë", "e"),
-    ("í", "i"),
-    ("ï", "i"),
-    ("ö", "o"),
-    ("ü", "u"),
-]
-
-
-def cleanup_text(inputs):
-    for src, dst in replacements:
-        inputs["normalized_text"] = inputs["normalized_text"].replace(src, dst)
-    return inputs
-
-
-dataset = dataset.map(cleanup_text)
-
-from collections import defaultdict
-
-speaker_counts = defaultdict(int)
-
-for speaker_id in dataset["speaker_id"]:
-    speaker_counts[speaker_id] += 1
-
-# import matplotlib.pyplot as plt
-
-# plt.figure()
-# plt.hist(speaker_counts.values(), bins=20)
-# plt.ylabel("Speakers")
-# plt.xlabel("Examples")
-# plt.show()
-
-
-def select_speaker(speaker_id):
-    return 100 <= speaker_counts[speaker_id] <= 400
-
-
-dataset = dataset.filter(select_speaker, input_columns=["speaker_id"])
-
-len(set(dataset["speaker_id"]))
-len(dataset)
-
-import os
-import torch
-from speechbrain.inference.classifiers import EncoderClassifier
-
-spk_model_name = "speechbrain/spkrec-xvect-voxceleb"
-
-speaker_model = EncoderClassifier.from_hparams(
-    source=spk_model_name,
-    run_opts={"device": device, "device_map": device},
-    savedir=os.path.join("/tmp", spk_model_name),
-)
-
-
-def create_speaker_embedding(waveform):
-    with torch.no_grad():
-        speaker_embeddings = speaker_model.encode_batch(torch.tensor(waveform))
-        speaker_embeddings = torch.nn.functional.normalize(speaker_embeddings, dim=2)
-        speaker_embeddings = speaker_embeddings.squeeze().cpu().numpy()
-    return speaker_embeddings
-
-
-def prepare_dataset(example):
-    audio = example["audio"]
-
-    example = processor(
-        text=example["normalized_text"],
-        audio_target=audio["array"],
-        sampling_rate=audio["sampling_rate"],
-        return_attention_mask=False,
+    vocabs = dataset.map(
+        extract_all_chars,
+        batched=True,
+        batch_size=-1,
+        keep_in_memory=True,
+        remove_columns=dataset.column_names,
     )
 
-    # strip off the batch dimension
-    example["labels"] = example["labels"][0]
+    dataset_vocab = set(vocabs["vocab"][0])
+    tokenizer_vocab = {k for k, _ in tokenizer.get_vocab().items()}
 
-    # use SpeechBrain to obtain x-vector
-    example["speaker_embeddings"] = create_speaker_embedding(audio["array"])
+    replacements = [
+        ("à", "a"),
+        ("ç", "c"),
+        ("è", "e"),
+        ("ë", "e"),
+        ("í", "i"),
+        ("ï", "i"),
+        ("ö", "o"),
+        ("ü", "u"),
+    ]
 
-    return example
+    def cleanup_text(inputs):
+        for src, dst in replacements:
+            inputs["normalized_text"] = inputs["normalized_text"].replace(src, dst)
+        return inputs
 
+    dataset = dataset.map(cleanup_text)
 
-processed_example = prepare_dataset(dataset[0])
-list(processed_example.keys())
+    speaker_counts = defaultdict(int)
 
-processed_example["speaker_embeddings"].shape
+    for speaker_id in dataset["speaker_id"]:
+        speaker_counts[speaker_id] += 1
 
-# import matplotlib.pyplot as plt
+    # import matplotlib.pyplot as plt
 
-# plt.figure()
-# plt.imshow(processed_example["labels"].T)
-# plt.show()
+    # plt.figure()
+    # plt.hist(speaker_counts.values(), bins=20)
+    # plt.ylabel("Speakers")
+    # plt.xlabel("Examples")
+    # plt.show()
 
-dataset = dataset.map(prepare_dataset, remove_columns=dataset.column_names)
+    def select_speaker(speaker_id):
+        return 100 <= speaker_counts[speaker_id] <= 400
 
+    dataset = dataset.filter(select_speaker, input_columns=["speaker_id"])
 
-def is_not_too_long(input_ids):
-    input_length = len(input_ids)
-    return input_length < 200
+    len(set(dataset["speaker_id"]))
+    len(dataset)
 
+    spk_model_name = "speechbrain/spkrec-xvect-voxceleb"
 
-dataset = dataset.filter(is_not_too_long, input_columns=["input_ids"])
-len(dataset)
+    speaker_model = EncoderClassifier.from_hparams(
+        source=spk_model_name,
+        run_opts={"device": device, "device_map": device},
+        savedir=os.path.join("/tmp", spk_model_name),
+    )
 
-dataset = dataset.train_test_split(test_size=0.1)
+    def create_speaker_embedding(waveform):
+        with torch.no_grad():
+            speaker_embeddings = speaker_model.encode_batch(torch.tensor(waveform))
+            speaker_embeddings = torch.nn.functional.normalize(
+                speaker_embeddings, dim=2
+            )
+            speaker_embeddings = speaker_embeddings.squeeze().cpu().numpy()
+        return speaker_embeddings
 
-from dataclasses import dataclass
-from typing import Any, Dict, List, Union
+    def prepare_dataset(example):
+        audio = example["audio"]
+
+        example = processor(
+            text=example["normalized_text"],
+            audio_target=audio["array"],
+            sampling_rate=audio["sampling_rate"],
+            return_attention_mask=False,
+        )
+
+        # strip off the batch dimension
+        example["labels"] = example["labels"][0]
+
+        # use SpeechBrain to obtain x-vector
+        example["speaker_embeddings"] = create_speaker_embedding(audio["array"])
+
+        return example
+
+    processed_example = prepare_dataset(dataset[0])
+    list(processed_example.keys())
+
+    processed_example["speaker_embeddings"].shape
+
+    # import matplotlib.pyplot as plt
+
+    # plt.figure()
+    # plt.imshow(processed_example["labels"].T)
+    # plt.show()
+
+    dataset = dataset.map(prepare_dataset, remove_columns=dataset.column_names)
+
+    def is_not_too_long(input_ids):
+        input_length = len(input_ids)
+        return input_length < 200
+
+    dataset = dataset.filter(is_not_too_long, input_columns=["input_ids"])
+    len(dataset)
+
+    dataset = dataset.train_test_split(test_size=0.1)
+    dataset.save_to_disk(f"{cache_dir}/processed_dataset")
+else:
+    dataset = load_from_disk(f"{cache_dir}/processed_dataset")
 
 
 @dataclass
@@ -209,17 +210,15 @@ class TTSDataCollatorWithPadding:
 
 data_collator = TTSDataCollatorWithPadding(processor=processor)
 
-from transformers import SpeechT5ForTextToSpeech
 
 model = SpeechT5ForTextToSpeech.from_pretrained(
     checkpoint, cache_dir=cache_dir, device_map=device
 )
 model.config.use_cache = False
 
-from transformers import Seq2SeqTrainingArguments
 
 training_args = Seq2SeqTrainingArguments(
-    output_dir="speecht5_finetuned_voxpopuli_nl",  # change to a repo name of your choice
+    output_dir=f"{cache_dir}/speecht5_finetuned_voxpopuli_nl",  # change to a repo name of your choice
     per_device_train_batch_size=1,
     gradient_accumulation_steps=32,
     learning_rate=1e-5,
@@ -228,7 +227,7 @@ training_args = Seq2SeqTrainingArguments(
     gradient_checkpointing=True,
     fp16=True,
     eval_strategy="steps",
-    per_device_eval_batch_size=2,
+    per_device_eval_batch_size=1,
     save_steps=1000,
     eval_steps=1000,
     logging_steps=25,
@@ -239,7 +238,6 @@ training_args = Seq2SeqTrainingArguments(
     push_to_hub=False,
 )
 
-from transformers import Seq2SeqTrainer
 
 trainer = Seq2SeqTrainer(
     args=training_args,
