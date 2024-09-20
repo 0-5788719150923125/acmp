@@ -17,5 +17,8 @@ setup(
         "speechbrain",
         "accelerate",
         "librosa",
+        "coqui-tts",
+        # "TTS @ git+https://github.com/coqui-ai/TTS.git",
+        # "TTS @ git+https://github.com/idiap/coqui-ai-TTS.git",
     ],
 )
